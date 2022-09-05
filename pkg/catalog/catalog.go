@@ -36,12 +36,19 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// hashAlg is the hashing algorithm to use to generate graveler identifiers.  Changing it
-// causes all old identifiers to change, so while existing installations will continue to
-// function they will be unable to re-use any existing objects.
-const hashAlg = crypto.SHA256
+const (
+	// hashAlg is the hashing algorithm to use to generate graveler identifiers.  Changing it
+	// causes all old identifiers to change, so while existing installations will continue to
+	// function they will be unable to re-use any existing objects.
+	hashAlg = crypto.SHA256
 
-const NumberOfParentsOfNonMergeCommit = 1
+	NumberOfParentsOfNonMergeCommit = 1
+
+	// commitLogCacheSize used while searching for specific object in the commit log
+	commitLogCacheSize      = 1024 * 5
+	commitLogNumWorkers     = 15
+	commitLogNumReadResults = 3
+)
 
 type Path string
 
@@ -956,39 +963,29 @@ func (c *Catalog) ListCommits(ctx context.Context, repositoryID string, branch s
 		return nil, false, err
 	}
 	defer it.Close()
+
 	// skip until 'fromReference' if needed
-	if params.FromReference != "" {
-		fromCommitID, err := c.dereferenceCommitID(ctx, repository, graveler.Ref(params.FromReference))
-		if err != nil {
-			return nil, false, fmt.Errorf("from ref: %w", err)
-		}
-		for it.Next() {
-			if it.Value().CommitID == fromCommitID {
-				break
-			}
-		}
-		if err := it.Err(); err != nil {
-			return nil, false, err
-		}
+	if err := c.listCommitsFromReference(ctx, repository, graveler.Ref(params.FromReference), it); err != nil {
+		return nil, false, err
+	}
+
+	// no specific object/prefix - render a list of commits
+	if len(params.PathList) == 0 {
+		return c.listCommitsLog(it, params.Amount, params.Limit)
 	}
 
 	// commit/key to value cache - helps when fetching the same commit/key while processing parent commits
-	const commitLogCacheSize = 1024 * 5
 	commitCache, err := lru.New(commitLogCacheSize)
 	if err != nil {
 		return nil, false, fmt.Errorf("commit log: %w", err)
 	}
 
 	childCtx, cancel := context.WithCancel(ctx)
-	const (
-		numWorkers     = 15
-		numReadResults = 3
-	)
 	wgWorkers := sync.WaitGroup{}
-	compareJobs := make(chan compareJob, numWorkers)
-	compareJobResults := make(chan compareJobResult, numReadResults)
+	compareJobs := make(chan compareJob, commitLogNumWorkers)
+	compareJobResults := make(chan compareJobResult, commitLogNumReadResults)
 	var g multierror.Group
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < commitLogNumWorkers; i++ {
 		wgWorkers.Add(1)
 		g.Go(func() error {
 			defer wgWorkers.Done()
@@ -1049,6 +1046,60 @@ func (c *Catalog) ListCommits(ctx context.Context, repositoryID string, branch s
 		commits = commits[:params.Amount]
 	}
 	return commits, hasMore, nil
+}
+
+func (c *Catalog) listCommitsLog(it graveler.CommitIterator, amount int, limit bool) ([]*CommitLog, bool, error) {
+	commits := make([]*CommitLog, 0)
+	for it.Next() {
+		// check after next to know if we have more than amount requested
+		if len(commits) >= amount {
+			return commits, true, nil
+		}
+		v := it.Value()
+		commit := newCommitLogByRecord(v)
+		commits = append(commits, commit)
+		if len(commits) >= amount && limit {
+			// stop collecting if we each the limit
+			break
+		}
+	}
+	if err := it.Err(); err != nil {
+		return nil, false, err
+	}
+	return commits, false, nil
+}
+
+func newCommitLogByRecord(v *graveler.CommitRecord) *CommitLog {
+	commit := &CommitLog{
+		Reference:    v.CommitID.String(),
+		Committer:    v.Committer,
+		Message:      v.Message,
+		CreationDate: v.CreationDate,
+		Metadata:     map[string]string(v.Metadata),
+		MetaRangeID:  string(v.MetaRangeID),
+		Parents:      make([]string, 0, len(v.Parents)),
+	}
+	for _, parent := range v.Parents {
+		commit.Parents = append(commit.Parents, parent.String())
+	}
+	return commit
+}
+
+// listCommitsFromReference more iterator 'it' to reference 'ref'
+func (c *Catalog) listCommitsFromReference(ctx context.Context, repository *graveler.RepositoryRecord, ref graveler.Ref, it graveler.CommitIterator) error {
+	if ref == "" {
+		return nil
+	}
+	fromCommitID, err := c.dereferenceCommitID(ctx, repository, ref)
+	if err != nil {
+		return fmt.Errorf("from ref: %w", err)
+	}
+	for it.Next() {
+		if it.Value().CommitID == fromCommitID {
+			break
+		}
+	}
+	return it.Err()
 }
 
 func drainAndWaitForWorkers(cancel context.CancelFunc, compareJobResults chan compareJobResult) {
@@ -1122,37 +1173,24 @@ func (c *Catalog) listCommitWorker(ctx context.Context, repository *graveler.Rep
 				return nil
 			}
 			v := job.commitRecord
-			if len(paths) > 0 {
-				// verify that commit includes a change with object/prefix from PathList
-				if len(v.Parents) != NumberOfParentsOfNonMergeCommit {
-					// skip merge commits
-					out <- compareJobResult{num: job.num}
-					continue
-				}
-				pathInCommit, err := c.checkPathListInCommit(ctx, repository, v, paths, commitCache)
-				if err != nil {
-					out <- compareJobResult{num: job.num, err: err}
-					break
-				}
-				if !pathInCommit {
-					// no object or prefix found skip commit
-					out <- compareJobResult{num: job.num}
-					continue
-				}
+			// verify that commit includes a change with object/prefix from PathList
+			if len(v.Parents) != NumberOfParentsOfNonMergeCommit {
+				// skip merge commits
+				out <- compareJobResult{num: job.num}
+				continue
+			}
+			pathInCommit, err := c.checkPathListInCommit(ctx, repository, v, paths, commitCache)
+			if err != nil {
+				out <- compareJobResult{num: job.num, err: err}
+				break
+			}
+			if !pathInCommit {
+				// no object or prefix found skip commit
+				out <- compareJobResult{num: job.num}
+				continue
 			}
 
-			commit := &CommitLog{
-				Reference:    v.CommitID.String(),
-				Committer:    v.Committer,
-				Message:      v.Message,
-				CreationDate: v.CreationDate,
-				Metadata:     map[string]string(v.Metadata),
-				MetaRangeID:  string(v.MetaRangeID),
-				Parents:      make([]string, 0, len(v.Parents)),
-			}
-			for _, parent := range v.Parents {
-				commit.Parents = append(commit.Parents, parent.String())
-			}
+			commit := newCommitLogByRecord(v)
 			out <- compareJobResult{num: job.num, log: commit}
 		}
 	}
