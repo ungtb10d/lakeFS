@@ -357,7 +357,6 @@ func (tfs *TierFS) openWithLock(ctx context.Context, fileRef localFileRef) (*os.
 	if err != nil {
 		return nil, err
 	}
-
 	fh, err := os.Open(fileFullPath.(string))
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
