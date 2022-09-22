@@ -90,8 +90,6 @@ func setupHandlerWithWalkerFactory(t testing.TB, factory catalog.WalkerFactory) 
 
 	collector := &memCollector{}
 
-	// wire actions
-
 	cfg, err := config.NewConfig()
 	testutil.MustDo(t, "config", err)
 	kvStore := kvtest.GetStore(ctx, t)
@@ -111,6 +109,7 @@ func setupHandlerWithWalkerFactory(t testing.TB, factory catalog.WalkerFactory) 
 	})
 	testutil.MustDo(t, "build catalog", err)
 
+	// wire actions
 	actionsService := actions.NewService(
 		ctx,
 		actionsStore,
@@ -134,10 +133,10 @@ func setupHandlerWithWalkerFactory(t testing.TB, factory catalog.WalkerFactory) 
 	auditChecker := version.NewDefaultAuditChecker(cfg.GetSecurityAuditCheckURL())
 	emailParams, _ := cfg.GetEmailParams()
 	emailer, err := email.NewEmailer(emailParams)
-	templater := templater.NewService(templates.Content, cfg, authService)
+	tmpl := templater.NewService(templates.Content, cfg, authService)
 
 	testutil.Must(t, err)
-	handler := api.Serve(cfg, c, authenticator, authenticator, authService, c.BlockAdapter, meta, migrator, collector, nil, actionsService, auditChecker, logging.Default(), emailer, templater, nil, nil, nil, nil)
+	handler := api.Serve(cfg, c, authenticator, authenticator, authService, c.BlockAdapter, meta, migrator, collector, nil, actionsService, auditChecker, logging.Default(), emailer, tmpl, nil, nil, nil, nil)
 
 	return handler, &dependencies{
 		blocks:      c.BlockAdapter,

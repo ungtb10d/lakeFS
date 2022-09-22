@@ -106,15 +106,16 @@ func (c *Controller) DeleteObjects(w http.ResponseWriter, r *http.Request, body 
 
 	// limit check
 	if len(body.Paths) > DefaultMaxDeleteObjects {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("%w, max paths is set to %d",
-			ErrRequestSizeExceeded, DefaultMaxDeleteObjects))
+		err := fmt.Errorf("%w, max paths is set to %d", ErrRequestSizeExceeded, DefaultMaxDeleteObjects)
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	// delete all the files and collect responses
-	var errs []ObjectError
+	// errs used to collect errors as part of the response, can't be nil
+	errs := make([]ObjectError, 0)
+	// check if we authorize to delete each object, prepare a list of paths we can delete
+	var pathsToDelete []string
 	for _, objectPath := range body.Paths {
-		// authorize this object deletion
 		if !c.authorize(w, r, permissions.Node{
 			Permission: permissions.Permission{
 				Action:   permissions.DeleteObjectAction,
@@ -126,14 +127,24 @@ func (c *Controller) DeleteObjects(w http.ResponseWriter, r *http.Request, body 
 				StatusCode: http.StatusUnauthorized,
 				Message:    http.StatusText(http.StatusUnauthorized),
 			})
-			continue
+		} else {
+			pathsToDelete = append(pathsToDelete, objectPath)
 		}
+	}
 
+	// batch delete the entries we allow to delete
+	delErr := c.Catalog.DeleteEntries(ctx, repository, branch, pathsToDelete)
+	delErrs := graveler.NewMapDeleteErrors(delErr)
+	for _, objectPath := range pathsToDelete {
+		// set err to the specific error when possible
+		err := delErrs[objectPath]
+		if err == nil {
+			err = delErr
+		}
 		lg := c.Logger.WithField("path", objectPath)
-		err := c.Catalog.DeleteEntry(ctx, repository, branch, objectPath)
 		switch {
-		case errors.Is(err, catalog.ErrNotFound):
-			lg.Debug("tried to delete a non-existent object")
+		case errors.Is(err, catalog.ErrNotFound), errors.Is(err, graveler.ErrNotFound):
+			lg.WithError(err).Debug("tried to delete a non-existent object")
 		case errors.Is(err, graveler.ErrWriteToProtectedBranch):
 			errs = append(errs, ObjectError{
 				Path:       StringPtr(objectPath),
@@ -156,12 +167,7 @@ func (c *Controller) DeleteObjects(w http.ResponseWriter, r *http.Request, body 
 			lg.Debug("object set for deletion")
 		}
 	}
-	// no content in case there are no errors
-	if len(errs) == 0 {
-		writeResponse(w, http.StatusNoContent, nil)
-		return
-	}
-	// status ok with list of errors
+
 	response := ObjectErrorList{
 		Errors: errs,
 	}
@@ -1351,12 +1357,7 @@ func (c *Controller) DeleteRepository(w http.ResponseWriter, r *http.Request, re
 	ctx := r.Context()
 	c.LogAction(ctx, "delete_repo")
 	err := c.Catalog.DeleteRepository(ctx, repository)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "repository not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	if c.handleAPIError(ctx, w, err) {
 		return
 	}
 	writeResponse(w, http.StatusNoContent, nil)
@@ -1384,7 +1385,8 @@ func (c *Controller) GetRepository(w http.ResponseWriter, r *http.Request, repos
 		}
 		writeResponse(w, http.StatusOK, response)
 
-	case errors.Is(err, catalog.ErrNotFound):
+	case errors.Is(err, catalog.ErrNotFound),
+		errors.Is(err, catalog.ErrRepositoryNotFound):
 		writeError(w, http.StatusNotFound, "repository not found")
 
 	case errors.Is(err, graveler.ErrRepositoryInDeletion):
@@ -1711,8 +1713,7 @@ func (c *Controller) handleAPIError(ctx context.Context, w http.ResponseWriter, 
 		errors.Is(err, graveler.ErrNotFound),
 		errors.Is(err, actions.ErrNotFound),
 		errors.Is(err, auth.ErrNotFound),
-		errors.Is(err, kv.ErrNotFound),
-		errors.Is(err, db.ErrNotFound):
+		errors.Is(err, kv.ErrNotFound):
 		writeError(w, http.StatusNotFound, err)
 
 	case errors.Is(err, graveler.ErrDirtyBranch),
@@ -1740,7 +1741,7 @@ func (c *Controller) handleAPIError(ctx context.Context, w http.ResponseWriter, 
 	case errors.Is(err, adapter.ErrDataNotFound):
 		writeError(w, http.StatusGone, "No data")
 
-	case errors.Is(err, db.ErrAlreadyExists):
+	case errors.Is(err, auth.ErrAlreadyExists):
 		writeError(w, http.StatusBadRequest, "Already exists")
 
 	case errors.Is(err, graveler.ErrTooManyTries):
@@ -2203,6 +2204,10 @@ func (c *Controller) GetCommit(w http.ResponseWriter, r *http.Request, repositor
 	ctx := r.Context()
 	c.LogAction(ctx, "get_commit")
 	commit, err := c.Catalog.GetCommit(ctx, repository, commitID)
+	if errors.Is(err, catalog.ErrRepositoryNotFound) {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "commit not found")
 		return
@@ -3154,7 +3159,7 @@ func (c *Controller) Setup(w http.ResponseWriter, r *http.Request, body SetupJSO
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if initialized || c.Config.IsAuthTypeAPI() {
+	if initialized {
 		writeError(w, http.StatusConflict, "lakeFS already initialized")
 		return
 	}
@@ -3166,6 +3171,11 @@ func (c *Controller) Setup(w http.ResponseWriter, r *http.Request, body SetupJSO
 		return
 	}
 
+	if c.Config.IsAuthTypeAPI() {
+		// nothing to do - users are managed elsewhere
+		writeResponse(w, http.StatusOK, CredentialsWithSecret{})
+		return
+	}
 	var cred *model.Credential
 	if body.Key == nil {
 		cred, err = auth.CreateInitialAdminUser(ctx, c.Auth, c.MetadataManager, body.Username)

@@ -161,12 +161,21 @@ object GarbageCollector {
       .filter(c => prefixes.exists(c.getKey.startsWith))
       .map(entry => (entry.getKey, entry.getValue))
       .toArray
+  <<<<<<< HEAD
 
   /** @return a serializable summary of values in hc starting with prefix.
    */
   def getHadoopConfigMapper(hc: Configuration, prefixes: String*): ConfigMapper =
     new ConfigMapper(spark.sparkContext.broadcast(getHadoopConfigurationValues(hc, prefixes: _*)))
 
+  =======
+
+  /** @return a serializable summary of values in hc starting with prefix.
+   */
+  def getHadoopConfigMapper(hc: Configuration, prefixes: String*): ConfigMapper =
+    new ConfigMapper(spark.sparkContext.broadcast(getHadoopConfigurationValues(hc, prefixes: _*)))
+
+  >>>>>>> master
   def main(args: Array[String]) {
     val hc = spark.sparkContext.hadoopConfiguration
 

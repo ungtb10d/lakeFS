@@ -104,6 +104,13 @@ func SetupTestingEnv(params *SetupTestingEnvParams) (logging.Logger, api.ClientW
 		logger.WithError(err).Fatal("could not initialize API client with security provider")
 	}
 
+	key := viper.GetString("access_key_id")
+	secret := viper.GetString("secret_access_key")
+	svc := SetupTestS3Client(key, secret)
+	return logger, client, svc
+}
+
+func SetupTestS3Client(key, secret string) *s3.S3 {
 	s3Endpoint := viper.GetString("s3_endpoint")
 	awsSession := session.Must(session.NewSession())
 	svc := s3.New(awsSession,
@@ -114,14 +121,13 @@ func SetupTestingEnv(params *SetupTestingEnvParams) (logging.Logger, api.ClientW
 			WithCredentials(credentials.NewCredentials(
 				&credentials.StaticProvider{
 					Value: credentials.Value{
-						AccessKeyID:     viper.GetString("access_key_id"),
-						SecretAccessKey: viper.GetString("secret_access_key"),
+						AccessKeyID:     key,
+						SecretAccessKey: secret,
 					}})))
-
-	return logger, client, svc
+	return svc
 }
 
-// Parses the given endpoint string
+// ParseEndpointURL parses the given endpoint string
 func ParseEndpointURL(logger logging.Logger, endpointURL string) string {
 	u, err := url.Parse(endpointURL)
 	if err != nil {
@@ -134,7 +140,7 @@ func ParseEndpointURL(logger logging.Logger, endpointURL string) string {
 	return endpointURL
 }
 
-// Creates a client using the credentials of a user
+// NewClientFromCreds creates a client using the credentials of a user
 func NewClientFromCreds(logger logging.Logger, accessKeyID string, secretAccessKey string, endpointURL string) (*api.ClientWithResponses, error) {
 	basicAuthProvider, err := securityprovider.NewSecurityProviderBasicAuth(accessKeyID, secretAccessKey)
 	if err != nil {

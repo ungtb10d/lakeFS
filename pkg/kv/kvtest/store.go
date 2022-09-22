@@ -60,6 +60,9 @@ func TestDriver(t *testing.T, name string, params kvparams.KV) {
 	t.Run("ScanPrefix", func(t *testing.T) { testScanPrefix(t, ms) })
 	t.Run("DeleteWhileIterating", func(t *testing.T) { testDeleteWhileIterPrefix(t, ms) })
 	t.Run("DeleteWhileIteratingSamePrefix", func(t *testing.T) { testDeleteWhileIterSamePrefix(t, ms) })
+	t.Run("PartitionIterator", func(t *testing.T) { testPartitionIterator(t, ms) })
+	t.Run("PrimaryIterator", func(t *testing.T) { testPrimaryIterator(t, ms) })
+	t.Run("SecondaryIterator", func(t *testing.T) { testSecondaryIterator(t, ms) })
 }
 
 func testDriverOpen(t *testing.T, ms MakeStore) {
@@ -371,6 +374,7 @@ func MakeStoreByName(name string, kvParams kvparams.KV) MakeStore {
 		if err != nil {
 			t.Fatalf("failed to open kv '%s' store: %s", name, err)
 		}
+		t.Cleanup(store.Close)
 		return store
 	}
 }

@@ -20,9 +20,9 @@ import scala.io.Source
 class BlockReadableSpec extends AnyFunSpec with Matchers {
 
   describe("instantiate BlockReadableFileChannel") {
-    describe("with null file channel") {
-      it("should fail with a Null Pointer Exception") {
-        assertThrows[NullPointerException] {
+    describe("with null file") {
+      it("should fail with an IllegalArgumentException") {
+        assertThrows[IllegalArgumentException] {
           new BlockReadableFile(null)
         }
       }
@@ -306,7 +306,10 @@ class GolangContainerSpec extends AnyFunSpec with ForAllTestContainer {
   override val container: GenericContainer = GenericContainer(
     "golang:1.16.2-alpine",
     classpathResourceMapping = Seq(
-      FileSystemBind("parser-test/sst_files_generator.go", "/local/sst_files_generator.go", BindMode.READ_WRITE),
+      FileSystemBind("parser-test/sst_files_generator.go",
+                     "/local/sst_files_generator.go",
+                     BindMode.READ_WRITE
+                    ),
       FileSystemBind("parser-test/go.mod", "/local/go.mod", BindMode.READ_WRITE),
       FileSystemBind("parser-test/go.sum", "/local/go.sum", BindMode.READ_WRITE)
     ),

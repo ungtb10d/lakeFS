@@ -73,19 +73,21 @@ type configuration struct {
 	}
 
 	Database struct {
-		// Deprecated: use Postgres struct
-		DeprecatedConnectionString SecureString `mapstructure:"connection_string"`
-		// Deprecated: use Postgres struct
-		DeprecatedMaxOpenConnections int32 `mapstructure:"max_open_connections"`
-		// Deprecated: use Postgres struct
-		DeprecatedMaxIdleConnections int32 `mapstructure:"max_idle_connections"`
-		// Deprecated: use Postgres struct
-		DeprecatedConnectionMaxLifetime time.Duration `mapstructure:"connection_max_lifetime"`
-
 		// DropTables Development flag to delete tables after successful migration to KV
 		DropTables bool `mapstructure:"drop_tables"`
-		// Type  Name of the KV Store driver DB implementation which is available according to the kv package Drivers function
+		// Type Name of the KV Store driver DB implementation which is available according to the kv package Drivers function
 		Type string `mapstructure:"type"`
+
+		Local *struct {
+			// Path - Local directory path to store the DB files
+			Path string `mapstructure:"path"`
+			// SyncWrites - Sync ensures data written to disk on each write instead of mem cache
+			SyncWrites *bool `mapstructure:"sync_writes"`
+			// PrefetchSize - Number of elements to prefetch while iterating
+			PrefetchSize int `mapstructure:"prefetch_size"`
+			// EnableLogging - Enable store and badger (trace only) logging
+			EnableLogging *bool `mapstructure:"enable_logging"`
+		} `mapstructure:"local"`
 
 		Postgres *struct {
 			ConnectionString      SecureString  `mapstructure:"connection_string"`

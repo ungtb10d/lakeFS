@@ -8,13 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	sq "github.com/Masterminds/squirrel"
 	"github.com/deepmap/oapi-codegen/pkg/securityprovider"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/go-openapi/swag"
@@ -64,7 +62,8 @@ type GatewayService interface {
 }
 
 type Authorizer interface {
-	// authorize user for an action
+	// Authorize checks 'req' containing user and required permissions. An error returns in case we fail perform the request.
+	// AuthorizationResponse holds if the request allowed and Error in case we fail with additional reason as ErrInsufficientPermissions.
 	Authorize(ctx context.Context, req *AuthorizationRequest) (*AuthorizationResponse, error)
 }
 
@@ -128,28 +127,6 @@ type Service interface {
 	Authorizer
 
 	ClaimTokenIDOnce(ctx context.Context, tokenID string, expiresAt int64) error
-}
-
-var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-
-// fieldNameByTag returns the name of the field of t that is tagged tag on key, or an empty string.
-func fieldByTag(t reflect.Type, key, tag string) string {
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if field.Type.Kind() == reflect.Struct && field.Anonymous {
-			if innerRes := fieldByTag(field.Type, key, tag); innerRes != "" {
-				return innerRes
-			}
-			continue
-		}
-
-		if l, ok := field.Tag.Lookup(key); ok {
-			if l == tag {
-				return field.Name
-			}
-		}
-	}
-	return ""
 }
 
 func (s *KVAuthService) ListKVPaged(ctx context.Context, protoType protoreflect.MessageType, params *model.PaginationParams, prefix []byte, secondary bool) ([]proto.Message, *model.Paginator, error) {
